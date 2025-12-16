@@ -9,7 +9,7 @@ This repository includes instructions on how to automate the deployment of a pre
 ## Usage
 
 1. Click **Deploy to Azure**.  
-    [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftayganr%2Fpurviewdemo%2Fmain%2Ftemplates%2Ftemplate.json)
+    [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ferikhjensen%2Fpurviewdemo%2Fmain%2Ftemplates%2Ftemplate.json)
 1. Select a **Region**.
     > Note: If you are planning to create a NEW Resource Group for the set of resources that will be created as part of this template, ensure to select a Region BEFORE creating a new Resource Group (otherwise the Resource Group will be created with the default location).
 1. Select the target **Azure Subscription**.
@@ -35,46 +35,46 @@ Note: An additional 10 minutes post-deployment may be required for:
 ## Validate Deployment
 
 1. Navigate to the Azure Portal, locate your **Resource Group**, click **Deployments**. You should see that the deployment has **Succeeded**.
-![Validate Deployment](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/01validate_deployment.png)
+![Validate Deployment](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/01validate_deployment.png)
 
 2. Within your resource group, you should see the following set of Azure resources.
-![Azure Resources](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/02validate_resources.png)
+![Azure Resources](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/02validate_resources.png)
 
 3. Navigate to your Microsoft Purview Account (e.g. `pvdemo{RAND_STRING}-pv`), click **Open Governance Portal** > **Data Map**. You should see 3 collections and 2 sources.
-![Microsoft Purview Data Map](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/03validate_datamap.png)
+![Microsoft Purview Data Map](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/03validate_datamap.png)
 
 4. Within the **Azure Data Lake Storage Gen2** source, click **View Details**, you should see a scan. Note: The scan may still be in progress and can take up to 10 minutes to complete.
-![Microsoft Purview Azure Data Lake Storage Gen2 Scan](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/05validate_scanadls.png)
+![Microsoft Purview Azure Data Lake Storage Gen2 Scan](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/05validate_scanadls.png)
 
 5. Within the **Azure Data Lake Storage Gen2** source, click the **New Scan** icon, click **Test connection**. The connection should be successful.
-![Microsoft Purview Azure Data Lake Storage Gen2 Test Connectivity](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/07validate_credadls.png)
+![Microsoft Purview Azure Data Lake Storage Gen2 Test Connectivity](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/07validate_credadls.png)
 
 6. Within the **Azure SQL Database** source, click **View Details**, you should see a scan. Note: The scan may still be in progress and can take up to 10 minutes to complete.
-![Microsoft Purview Azure SQL Database Scan](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/04validate_scansql.png)
+![Microsoft Purview Azure SQL Database Scan](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/04validate_scansql.png)
 
 7. Within the **Azure SQL Database** source, click the **New Scan** icon, select a **Database name**, set **Credential** to **sql-cred** , toggle **Lineage extraction** to **Off**, and click **Test connection**. The connection should be successful.
-![Microsoft Purview Azure SQL Database Test Connectivity](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/06validate_credsql.png)
+![Microsoft Purview Azure SQL Database Test Connectivity](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/06validate_credsql.png)
 
 8. Navigate to **Data Map** > **Collections** > **Role assignments**. You should see your user added to each role (Collection admin, Data Source admin, Data curator, Data reader), you should also see the Azure Data Factory Managed Identity added as a Data Curator.
-![Microsoft Purview Role Assignments](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/08validate_roleassignments.png)
+![Microsoft Purview Role Assignments](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/08validate_roleassignments.png)
 
 9. Navigate to **Management** > **Data Factory**. You should see a Connected Azure Data Factory account.
-![Azure Data Factory Integration](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/09validate_adf.png)
+![Azure Data Factory Integration](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/09validate_adf.png)
 
 10. Navigate to **Data Catalog** > **Manage Glossary** and click **Hierarchical** view. You should see a pre-populated Glossary.
-![Microsoft Purview Glossary](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/10validate_glossary.png)
+![Microsoft Purview Glossary](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/10validate_glossary.png)
 
 11. Navigate to **Management** > **Credentials**. You should see credential from Azure Key Vault.
-![Microsoft Purview Credential](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/11validate_keyvault.png)
+![Microsoft Purview Credential](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/11validate_keyvault.png)
 
 12. Within the search bar, search for "copy" and navigate to the `Copy_a9c` asset within Purview and then click **Lineage**. You should see lineage from the Azure Data Factory Copy Activity. Note: The pipeline within Azure Data Factory may still be running and can take up to 10 minutes to complete. To check the status of the pipeline, navigate to Azure Data Factory and check Monitoring.
-![Microsoft Purview Lineage](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/12validate_lineage.png)
+![Microsoft Purview Lineage](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/12validate_lineage.png)
 
 <!-- 13. Navigate to the Synapse Workspace and click Open Synapse Studio > Data, search for "merged", open the `merged.parquet` asset. Within the asset details page, select Develop > New SQL script > Select top 100.
-![Azure Synapse Analytics Browse Purview](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/13validate_synapsebrowse.png)
+![Azure Synapse Analytics Browse Purview](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/13validate_synapsebrowse.png)
 
 14. Click Run to query the parquet file.
-![Azure Synapse Analytics Query Purview Asset](https://raw.githubusercontent.com/tayganr/purviewdemo/main/images/14validate_synapsequery.png) -->
+![Azure Synapse Analytics Query Purview Asset](https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/images/14validate_synapsequery.png) -->
 
 <div align="right"><a href="#azure-purview-demo-environment">↥ back to top</a></div>
 
