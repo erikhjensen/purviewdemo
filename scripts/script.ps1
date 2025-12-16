@@ -250,50 +250,85 @@ Write-Host "`n=== Starting Purview Configuration ===" -ForegroundColor Cyan
 Write-Host "Adding managed identity to Purview root collection..." -ForegroundColor Yellow
 Write-Host "Using Azure Management REST API..." -ForegroundColor Cyan
 
-try {
-    # Get Azure management API token
-    Write-Host "  Getting access token..." -ForegroundColor Gray
-    $token = (Get-AzAccessToken -ResourceUrl "https://management.azure.com/").Token
-    
-    # Build the REST API URL
-    $apiUrl = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.Purview/accounts/$accountName/addRootCollectionAdmin?api-version=2021-07-01"
-    
-    Write-Host "  Adding objectId $objectId to root collection..." -ForegroundColor Gray
-    
-    # Prepare request body
-    $body = @{
-        objectId = $objectId
-    } | ConvertTo-Json
-    
-    # Make the REST API call
-    $response = Invoke-RestMethod -Uri $apiUrl `
-        -Method Post `
-        -Headers @{
-            'Authorization' = "Bearer $token"
-            'Content-Type' = 'application/json'
-        } `
-        -Body $body `
-        -ErrorAction Stop
-    
-    Write-Host "  ✓ Successfully added managed identity to root collection" -ForegroundColor Green
-    
-} catch {
-    $errorMessage = $_.Exception.Message
-    $errorResponse = $_.Exception.Response
-    
-    Write-Error "Failed to add managed identity to root collection: $errorMessage"
-    
-    if ($errorResponse) {
-        Write-Host "  Status Code: $($errorResponse.StatusCode)" -ForegroundColor Red
-        Write-Host "  Status Description: $($errorResponse.StatusDescription)" -ForegroundColor Red
+# Wait for RBAC role assignments to propagate
+Write-Host "  Waiting 30 seconds for RBAC permissions to propagate..." -ForegroundColor Yellow
+Start-Sleep -Seconds 30
+
+$maxAttempts = 5
+$attemptDelay = 15
+$success = $false
+
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    try {
+        Write-Host "`n  Attempt $attempt of $maxAttempts..." -ForegroundColor Cyan
+        
+        # Get Azure management API token
+        Write-Host "  Getting access token..." -ForegroundColor Gray
+        $token = (Get-AzAccessToken -ResourceUrl "https://management.azure.com/").Token
+        
+        # Build the REST API URL
+        $apiUrl = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.Purview/accounts/$accountName/addRootCollectionAdmin?api-version=2021-07-01"
+        
+        Write-Host "  Adding objectId $objectId to root collection..." -ForegroundColor Gray
+        
+        # Prepare request body
+        $body = @{
+            objectId = $objectId
+        } | ConvertTo-Json
+        
+        # Make the REST API call
+        $response = Invoke-RestMethod -Uri $apiUrl `
+            -Method Post `
+            -Headers @{
+                'Authorization' = "Bearer $token"
+                'Content-Type' = 'application/json'
+            } `
+            -Body $body `
+            -ErrorAction Stop
+        
+        Write-Host "  ✓ Successfully added managed identity to root collection" -ForegroundColor Green
+        $success = $true
+        break
+        
+    } catch {
+        $errorMessage = $_.Exception.Message
+        $statusCode = $_.Exception.Response.StatusCode.value__
+        
+        Write-Warning "  Attempt $attempt failed: $errorMessage"
+        
+        # Check if it's an "already exists" error (which is OK)
+        if ($errorMessage -like "*already exists*" -or $errorMessage -like "*already a member*") {
+            Write-Host "  ℹ️  Identity is already a member of root collection - continuing..." -ForegroundColor Yellow
+            $success = $true
+            break
+        }
+        
+        # If 401 Unauthorized, RBAC might not have propagated yet
+        if ($statusCode -eq 401) {
+            Write-Warning "  401 Unauthorized - RBAC permissions may not have propagated yet"
+            
+            if ($attempt -lt $maxAttempts) {
+                Write-Host "  Waiting $attemptDelay seconds before retry..." -ForegroundColor Yellow
+                Start-Sleep -Seconds $attemptDelay
+            }
+        } else {
+            # For other errors, fail immediately
+            Write-Error "Failed to add managed identity to root collection: $errorMessage"
+            if ($_.Exception.Response) {
+                Write-Host "  Status Code: $statusCode" -ForegroundColor Red
+            }
+            throw
+        }
     }
-    
-    # Check if it's an "already exists" error (which is OK)
-    if ($errorMessage -like "*already exists*" -or $errorMessage -like "*already a member*") {
-        Write-Host "  ℹ️  Identity is already a member of root collection - continuing..." -ForegroundColor Yellow
-    } else {
-        throw
-    }
+}
+
+if (-not $success) {
+    Write-Error "Failed to add managed identity to root collection after $maxAttempts attempts"
+    Write-Host "`nTroubleshooting tips:" -ForegroundColor Yellow
+    Write-Host "1. Verify the managed identity has Owner permissions on the resource group" -ForegroundColor Gray
+    Write-Host "2. RBAC permissions can take up to 5 minutes to propagate" -ForegroundColor Gray
+    Write-Host "3. Check Azure Portal > Resource Group > Access Control (IAM)" -ForegroundColor Gray
+    throw "RBAC permissions did not propagate in time"
 }
 
 # Get Access Token
