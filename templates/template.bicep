@@ -39,8 +39,9 @@ resource userAssignedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@
 }
 
 // Role Assignment: Who: Managed Identity (configDeployer); What: Owner (RBAC role); Scope: Resource Group
+// Using deterministic GUID to prevent conflicts on re-deployment
 resource roleAssignment 'Microsoft.Authorization/roleAssignments@2020-08-01-preview' = {
-  name: guid('ra01${resourceGroupName}')
+  name: guid(resourceGroup().id, userAssignedIdentity.id, role['Owner'])
   scope: resourceGroup()
   properties: {
     principalId: userAssignedIdentity.properties.principalId
@@ -359,7 +360,7 @@ resource sws 'Microsoft.Synapse/workspaces@2021-05-01' = {
 
 // Role Assignment: Who: Managed Identity (Purview); What: Storage Blob Data Reader (RBAC role); Scope: ADLS Gen2 Storage Account
 resource roleAssignment3 'Microsoft.Authorization/roleAssignments@2020-08-01-preview' = {
-  name: guid('ra03${resourceGroupName}')
+  name: guid(adls.id, purviewAccount.id, role['StorageBlobDataReader'])
   scope: adls
   properties: {
     principalId: purviewAccount.identity.principalId
@@ -370,7 +371,7 @@ resource roleAssignment3 'Microsoft.Authorization/roleAssignments@2020-08-01-pre
 
 // Role Assignment: Who: Managed Identity (Data Factory); What: Storage Blob Data Contributor (RBAC role); Scope: ADLS Gen2 Storage Account
 resource roleAssignment7 'Microsoft.Authorization/roleAssignments@2020-08-01-preview' = {
-  name: guid('ra07${resourceGroupName}')
+  name: guid(adls.id, adf.id, role['StorageBlobDataContributor'])
   scope: adls
   properties: {
     principalId: adf.identity.principalId
@@ -381,7 +382,7 @@ resource roleAssignment7 'Microsoft.Authorization/roleAssignments@2020-08-01-pre
 
 // Role Assignment: Who: Managed Identity (Synapse Analytics); What: Storage Blob Data Contributor (RBAC role); Scope: ADLS Gen2 Storage Account (Synapse Workspace)
 resource roleAssignment8 'Microsoft.Authorization/roleAssignments@2020-08-01-preview' = {
-  name: guid('ra08${resourceGroupName}')
+  name: guid(swsadls.id, sws.id, role['StorageBlobDataContributor'])
   scope: swsadls
   properties: {
     principalId: sws.identity.principalId
@@ -407,11 +408,13 @@ resource script 'Microsoft.Resources/deploymentScripts@2020-10-01' = {
   location: location
   kind: 'AzurePowerShell'
   properties: {
-    azPowerShellVersion: '7.2'
+    azPowerShellVersion: '11.0'
     arguments: '-subscriptionId ${subscriptionId} -resourceGroupName ${resourceGroupName} -accountName ${purviewAccount.name} -objectId ${userAssignedIdentity.properties.principalId} -sqlServerAdminLogin ${sqlServerAdminLogin} -sqlSecretName ${sqlSecretName} -vaultUri ${kv.properties.vaultUri} -sqlServerName ${sqlsvr.name} -location ${location} -sqlDatabaseName ${sqldb.name} -storageAccountName ${adls.name} -adfName ${adf.name} -adfPipelineName ${adf::pipelineCopy.name} -adfPrincipalId ${adf.identity.principalId}'
-    primaryScriptUri: 'https://raw.githubusercontent.com/tayganr/purviewdemo/main/scripts/script.ps1'
-    forceUpdateTag: guid(resourceGroup().id)
+    primaryScriptUri: 'https://raw.githubusercontent.com/erikhjensen/purviewdemo/main/scripts/script.ps1'
+    forceUpdateTag: guid(resourceGroup().id, deployment().name)
     retentionInterval: 'PT4H'
+    timeout: 'PT30M'
+    cleanupPreference: 'OnExpiration'
   }
   identity: {
     type: 'UserAssigned'
