@@ -1,22 +1,65 @@
 param(
-    [string]$accountName,
-    [string]$adfName,
-    [string]$adfPipelineName,
-    [string]$adfPrincipalId,
-    [string]$location,
-    [string]$objectId,
-    [string]$resourceGroupName,
-    [string]$sqlDatabaseName,
-    [string]$sqlSecretName,
-    [string]$sqlServerAdminLogin,
-    [string]$sqlServerName,
-    [string]$storageAccountName,
-    [string]$subscriptionId,
-    [string]$vaultUri
+    [Parameter(Mandatory)][string]$accountName,
+    [Parameter(Mandatory)][string]$adfName,
+    [Parameter(Mandatory)][string]$adfPipelineName,
+    [Parameter(Mandatory)][string]$adfPrincipalId,
+    [Parameter(Mandatory)][string]$location,
+    [Parameter(Mandatory)][string]$objectId,
+    [Parameter(Mandatory)][string]$resourceGroupName,
+    [Parameter(Mandatory)][string]$sqlDatabaseName,
+    [Parameter(Mandatory)][string]$sqlSecretName,
+    [Parameter(Mandatory)][string]$sqlServerAdminLogin,
+    [Parameter(Mandatory)][string]$sqlServerName,
+    [Parameter(Mandatory)][string]$storageAccountName,
+    [Parameter(Mandatory)][string]$subscriptionId,
+    [Parameter(Mandatory)][string]$vaultUri
 )
 
-Install-Module Az.Purview -Force
-Import-Module Az.Purview
+
+# --------------------------------------------------------------------
+# Guard against Az module version collisions in ARM/Bicep DeploymentScript
+# --------------------------------------------------------------------
+$ErrorActionPreference = 'Stop'
+$global:PSModuleAutoloadingPreference = 'None'
+
+# Remove any Az modules already loaded into the session
+Get-Module Az* -All |
+  Sort-Object Name, Version -Descending |
+  ForEach-Object {
+    try { Remove-Module $_.Name -Force -ErrorAction SilentlyContinue } catch {}
+  }
+
+# Trust PSGallery (Deployment Script runs non-interactive)
+try { Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted } catch {}
+
+function Ensure-ModuleVersion {
+  param(
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][string]$Version
+  )
+  $available = Get-Module $Name -ListAvailable | Where-Object { $_.Version -eq [version]$Version }
+  if (-not $available) {
+    Install-Module -Name $Name -RequiredVersion $Version -Scope CurrentUser -Force -ErrorAction Stop
+  }
+  Import-Module -Name $Name -RequiredVersion $Version -Force -ErrorAction Stop
+}
+
+# Pin exact versions: Az.Purview 0.3.0 requires Az.Accounts 5.1.1
+Ensure-ModuleVersion -Name 'Az.Accounts'  -Version '5.1.1'
+Ensure-ModuleVersion -Name 'Az.Purview'   -Version '0.3.0'
+
+# Pin other Az modules used in this script to avoid pulling an incompatible bundle
+# (Adjust versions if your org standard differs; these are commonly compatible with Az.Accounts 5.1.1.)
+Ensure-ModuleVersion -Name 'Az.Storage'     -Version '5.4.0'
+Ensure-ModuleVersion -Name 'Az.DataFactory' -Version '1.18.3'
+
+Write-Host 'Resolved Az modules:'
+Get-Module Az.Accounts, Az.Purview, Az.Storage, Az.DataFactory |
+  Format-Table Name, Version, ModuleBase
+# --------------------------------------------------------------------
+# End guard
+# --------------------------------------------------------------------
+
 
 # Variables
 $pv_endpoint = "https://${accountName}.purview.azure.com"
@@ -277,6 +320,7 @@ $containerName = "bing"
 $storageAccount = Get-AzStorageAccount -ResourceGroupName $resourceGroupName -Name $storageAccountName
 $RepoUrl = 'https://api.github.com/repos/microsoft/BingCoronavirusQuerySet/zipball/master'
 Invoke-RestMethod -Uri $RepoUrl -OutFile "${containerName}.zip"
+if (Test-Path "${containerName}") { Remove-Item "${containerName}" -Recurse -Force }
 Expand-Archive -Path "${containerName}.zip"
 Set-Location -Path "${containerName}"
 Get-ChildItem -File -Recurse | Set-AzStorageBlobContent -Container ${containerName} -Context $storageAccount.Context
@@ -315,7 +359,7 @@ $scanAdlsPayload = @{
         }
     }
 }
-$scacn2 = putScan $access_token $sourceAdlsPayload.name $scanAdlsPayload
+$scan2 = putScan $access_token $sourceAdlsPayload.name $scanAdlsPayload
 
 # 12. Trigger Scan
 $run2 = runScan $access_token $sourceAdlsPayload.name $scanAdlsPayload.name
