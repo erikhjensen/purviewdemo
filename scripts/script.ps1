@@ -17,140 +17,75 @@ param(
 
 
 # --------------------------------------------------------------------
-# CRITICAL: Module Management for Az.Purview Strict Requirements
-# Az.Purview 0.3.0 REQUIRES EXACTLY Az.Accounts 5.1.1
+# Pragmatic Module Management for Deployment Script Environment
+# Azure Deployment Scripts (PowerShell 11.0) come with pre-loaded Az modules
+# Work with the existing environment rather than trying to replace modules
 # --------------------------------------------------------------------
 $ErrorActionPreference = 'Stop'
 
-Write-Host "=== CRITICAL MODULE MANAGEMENT ===" -ForegroundColor Cyan
-Write-Host "Az.Purview 0.3.0 requires EXACTLY Az.Accounts 5.1.1" -ForegroundColor Yellow
-Write-Host "Preparing clean PowerShell environment..." -ForegroundColor Yellow
+Write-Host "=== Azure Module Check ===" -ForegroundColor Cyan
+Write-Host "Deployment Script: Azure PowerShell 11.0 environment" -ForegroundColor Yellow
+Write-Host "Working with pre-loaded Az modules..." -ForegroundColor Yellow
 
-# Trust PSGallery
-Write-Host "`nConfiguring PSGallery..." -ForegroundColor Cyan
-try {
-    Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction Stop
-    Write-Host "  ✓ PSGallery is trusted" -ForegroundColor Green
-} catch {
-    Write-Warning "Could not configure PSGallery: $_"
-}
-
-# Show what's currently loaded
-Write-Host "`nCurrently loaded Az modules:" -ForegroundColor Cyan
-$preLoadedModules = Get-Module Az.* 
-if ($preLoadedModules) {
-    $preLoadedModules | Format-Table Name, Version -AutoSize
+# Show what's already loaded
+Write-Host "`nPre-loaded Az modules:" -ForegroundColor Cyan
+$loadedModules = Get-Module Az.*
+if ($loadedModules) {
+    $loadedModules | Format-Table Name, Version -AutoSize
 } else {
-    Write-Host "  (none)" -ForegroundColor Gray
+    Write-Host "  (none - will load as needed)" -ForegroundColor Gray
 }
 
-# AGGRESSIVELY remove ALL Az modules from current session
-Write-Host "`nRemoving ALL Az modules from session..." -ForegroundColor Yellow
-Get-Module Az.* | ForEach-Object {
-    Write-Host "  Removing: $($_.Name) v$($_.Version)" -ForegroundColor Gray
-    Remove-Module $_.Name -Force -ErrorAction SilentlyContinue
-}
+# Check for Az.Purview specifically
+$purviewModule = Get-Module Az.Purview -ListAvailable | Select-Object -First 1
 
-# Verify all removed
-$stillLoaded = Get-Module Az.*
-if ($stillLoaded) {
-    Write-Warning "Some modules still loaded: $($stillLoaded.Name -join ', ')"
+if ($purviewModule) {
+    Write-Host "`nAz.Purview found: v$($purviewModule.Version)" -ForegroundColor Green
+    Write-Host "Attempting to import Az.Purview..." -ForegroundColor Cyan
+    
+    try {
+        Import-Module Az.Purview -Global -ErrorAction Stop
+        $loaded = Get-Module Az.Purview
+        Write-Host "  ✓ Az.Purview v$($loaded.Version) loaded successfully" -ForegroundColor Green
+        $script:UsePurviewRestApi = $false
+    } catch {
+        Write-Warning "Failed to import Az.Purview: $_"
+        Write-Host "Will use REST API fallback for Purview operations" -ForegroundColor Yellow
+        $script:UsePurviewRestApi = $true
+    }
 } else {
-    Write-Host "  ✓ All Az modules removed from session" -ForegroundColor Green
+    Write-Warning "Az.Purview module not available in this environment"
+    Write-Host "Will use REST API for all Purview operations" -ForegroundColor Yellow
+    $script:UsePurviewRestApi = $true
 }
 
-# Function to install and import exact version
-function Install-ExactAzModule {
-    param(
-        [Parameter(Mandatory)][string]$ModuleName,
-        [Parameter(Mandatory)][string]$RequiredVersion
-    )
-    
-    Write-Host "`nProcessing: $ModuleName $RequiredVersion" -ForegroundColor Yellow
-    
-    # Check if exact version is installed
-    $installedVersion = Get-Module -Name $ModuleName -ListAvailable | 
-        Where-Object { $_.Version -eq [version]$RequiredVersion }
-    
-    if (-not $installedVersion) {
-        Write-Host "  Installing $ModuleName $RequiredVersion..." -ForegroundColor Cyan
+# Ensure core modules are available
+Write-Host "`nVerifying core Az modules..." -ForegroundColor Cyan
+
+$coreModules = @('Az.Accounts', 'Az.Storage', 'Az.DataFactory')
+foreach ($moduleName in $coreModules) {
+    $module = Get-Module $moduleName
+    if (-not $module) {
+        Write-Host "  Loading $moduleName..." -ForegroundColor Yellow
         try {
-            Install-Module -Name $ModuleName `
-                -RequiredVersion $RequiredVersion `
-                -Repository PSGallery `
-                -Scope CurrentUser `
-                -AllowClobber `
-                -Force `
-                -SkipPublisherCheck `
-                -ErrorAction Stop
-            Write-Host "  ✓ Installed $ModuleName $RequiredVersion" -ForegroundColor Green
+            Import-Module $moduleName -Global -ErrorAction Stop
+            $module = Get-Module $moduleName
+            Write-Host "  ✓ $moduleName v$($module.Version)" -ForegroundColor Green
         } catch {
-            Write-Error "Failed to install $ModuleName $RequiredVersion : $_"
+            Write-Error "Failed to load $moduleName : $_"
             throw
         }
     } else {
-        Write-Host "  ✓ $ModuleName $RequiredVersion already installed" -ForegroundColor Green
-    }
-    
-    # Import the EXACT version
-    Write-Host "  Importing $ModuleName $RequiredVersion..." -ForegroundColor Cyan
-    try {
-        Import-Module -Name $ModuleName `
-            -RequiredVersion $RequiredVersion `
-            -Global `
-            -Force `
-            -ErrorAction Stop
-        
-        $loaded = Get-Module -Name $ModuleName
-        if ($loaded.Version -eq [version]$RequiredVersion) {
-            Write-Host "  ✓ Successfully loaded $ModuleName v$($loaded.Version)" -ForegroundColor Green
-        } else {
-            throw "Wrong version loaded! Expected $RequiredVersion but got $($loaded.Version)"
-        }
-    } catch {
-        Write-Error "Failed to import $ModuleName $RequiredVersion : $_"
-        throw
+        Write-Host "  ✓ $moduleName v$($module.Version) already loaded" -ForegroundColor Green
     }
 }
 
-# Install and import modules in EXACT versions required by Az.Purview 0.3.0
-Write-Host "`n=== Installing Required Module Versions ===" -ForegroundColor Cyan
-Write-Host "This may take several minutes on first run..." -ForegroundColor Yellow
+Write-Host "`n=== Module Check Complete ===" -ForegroundColor Green
+Write-Host "Loaded Az modules:" -ForegroundColor Cyan
+Get-Module Az.* | Format-Table Name, Version -AutoSize
 
-try {
-    # Az.Accounts 5.1.1 is REQUIRED by Az.Purview 0.3.0
-    Install-ExactAzModule -ModuleName 'Az.Accounts' -RequiredVersion '5.1.1'
-    
-    # Install compatible versions of other modules
-    # These versions are compatible with Az.Accounts 5.1.1
-    Install-ExactAzModule -ModuleName 'Az.Storage' -RequiredVersion '5.4.0'
-    Install-ExactAzModule -ModuleName 'Az.DataFactory' -RequiredVersion '1.18.3'
-    
-    # Finally, install Az.Purview
-    # Note: If Az.Purview still fails, we may need to use REST APIs instead
-    Write-Host "`nAttempting to install Az.Purview 0.3.0..." -ForegroundColor Yellow
-    Write-Host "(If this fails, we'll use REST API fallback)" -ForegroundColor Gray
-    
-    try {
-        Install-ExactAzModule -ModuleName 'Az.Purview' -RequiredVersion '0.3.0'
-    } catch {
-        Write-Warning "Az.Purview installation failed: $_"
-        Write-Host "Will use REST API methods instead of Az.Purview cmdlets" -ForegroundColor Yellow
-        $script:UsePurviewRestApi = $true
-    }
-    
-    Write-Host "`n=== Module Loading Complete ===" -ForegroundColor Green
-    Write-Host "Final loaded modules:" -ForegroundColor Cyan
-    Get-Module Az.* | Format-Table Name, Version, Path -AutoSize
-    
-} catch {
-    Write-Error "CRITICAL: Failed to set up required modules: $_"
-    Write-Host "`nDiagnostic Information:" -ForegroundColor Red
-    Write-Host "Available Az.Accounts versions:" -ForegroundColor Yellow
-    Get-Module Az.Accounts -ListAvailable | Format-Table Version, Path -AutoSize
-    Write-Host "`nCurrently loaded modules:" -ForegroundColor Yellow
-    Get-Module Az.* | Format-Table Name, Version -AutoSize
-    throw
+if ($script:UsePurviewRestApi) {
+    Write-Host "`n⚠️  NOTE: Using REST API for Purview operations" -ForegroundColor Yellow
 }
 
 # --------------------------------------------------------------------
@@ -310,93 +245,54 @@ function putSource([string]$access_token, [hashtable]$payload) {
 
 Write-Host "`n=== Starting Purview Configuration ===" -ForegroundColor Cyan
 
-# Add UAMI to Root Collection Admin
-# Use cmdlet if available, otherwise use REST API
+# Add UAMI to Root Collection Admin using REST API
+# This is more reliable than Az.Purview cmdlets in deployment script environments
 Write-Host "Adding managed identity to Purview root collection..." -ForegroundColor Yellow
+Write-Host "Using Azure Management REST API..." -ForegroundColor Cyan
 
-if ($script:UsePurviewRestApi -eq $true) {
-    Write-Host "Using REST API method (Az.Purview cmdlet unavailable)..." -ForegroundColor Yellow
+try {
+    # Get Azure management API token
+    Write-Host "  Getting access token..." -ForegroundColor Gray
+    $token = (Get-AzAccessToken -ResourceUrl "https://management.azure.com/").Token
     
-    try {
-        # Get management token
-        $token = (Get-AzAccessToken -ResourceUrl "https://management.azure.com/").Token
-        
-        # Build the REST API URL
-        $apiUrl = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.Purview/accounts/$accountName/addRootCollectionAdmin?api-version=2021-07-01"
-        
-        # Prepare request body
-        $body = @{
-            objectId = $objectId
-        } | ConvertTo-Json
-        
-        # Make the REST API call
-        $response = Invoke-RestMethod -Uri $apiUrl -Method Post -Headers @{
+    # Build the REST API URL
+    $apiUrl = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.Purview/accounts/$accountName/addRootCollectionAdmin?api-version=2021-07-01"
+    
+    Write-Host "  Adding objectId $objectId to root collection..." -ForegroundColor Gray
+    
+    # Prepare request body
+    $body = @{
+        objectId = $objectId
+    } | ConvertTo-Json
+    
+    # Make the REST API call
+    $response = Invoke-RestMethod -Uri $apiUrl `
+        -Method Post `
+        -Headers @{
             'Authorization' = "Bearer $token"
             'Content-Type' = 'application/json'
-        } -Body $body -ErrorAction Stop
-        
-        Write-Host "  ✓ Successfully added managed identity to root collection via REST API" -ForegroundColor Green
-        
-    } catch {
-        Write-Error "Failed to add managed identity via REST API: $_"
-        Write-Host "Response: $($_.Exception.Response)" -ForegroundColor Red
-        throw
+        } `
+        -Body $body `
+        -ErrorAction Stop
+    
+    Write-Host "  ✓ Successfully added managed identity to root collection" -ForegroundColor Green
+    
+} catch {
+    $errorMessage = $_.Exception.Message
+    $errorResponse = $_.Exception.Response
+    
+    Write-Error "Failed to add managed identity to root collection: $errorMessage"
+    
+    if ($errorResponse) {
+        Write-Host "  Status Code: $($errorResponse.StatusCode)" -ForegroundColor Red
+        Write-Host "  Status Description: $($errorResponse.StatusDescription)" -ForegroundColor Red
     }
     
-} else {
-    # Try using the Az.Purview cmdlet
-    Write-Host "Using Az.Purview cmdlet..." -ForegroundColor Cyan
-    
-    $maxRetries = 3
-    $retryCount = 0
-    $success = $false
-
-    while (-not $success -and $retryCount -lt $maxRetries) {
-        try {
-            $retryCount++
-            Write-Host "Attempt $retryCount of $maxRetries..." -ForegroundColor Cyan
-            
-            # Verify the cmdlet is available
-            $cmdlet = Get-Command Add-AzPurviewAccountRootCollectionAdmin -ErrorAction Stop
-            Write-Host "  ✓ Cmdlet found: $($cmdlet.Source)" -ForegroundColor Green
-            
-            # Execute the command
-            Add-AzPurviewAccountRootCollectionAdmin -AccountName $accountName -ResourceGroupName $resourceGroupName -ObjectId $objectId -ErrorAction Stop
-            
-            Write-Host "  ✓ Successfully added managed identity to root collection" -ForegroundColor Green
-            $success = $true
-            
-        } catch {
-            Write-Warning "  Attempt $retryCount failed: $_"
-            
-            if ($retryCount -lt $maxRetries) {
-                Write-Host "  Waiting 10 seconds before retry..." -ForegroundColor Yellow
-                Start-Sleep -Seconds 10
-                
-                # Try reimporting the module
-                Write-Host "  Reimporting Az.Purview module..." -ForegroundColor Cyan
-                Import-Module Az.Purview -Force -Global -ErrorAction SilentlyContinue
-            } else {
-                Write-Error "Failed to add managed identity to root collection after $maxRetries attempts"
-                Write-Host "Falling back to REST API..." -ForegroundColor Yellow
-                
-                # Fallback to REST API
-                try {
-                    $token = (Get-AzAccessToken -ResourceUrl "https://management.azure.com/").Token
-                    $apiUrl = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.Purview/accounts/$accountName/addRootCollectionAdmin?api-version=2021-07-01"
-                    $body = @{ objectId = $objectId } | ConvertTo-Json
-                    $response = Invoke-RestMethod -Uri $apiUrl -Method Post -Headers @{
-                        'Authorization' = "Bearer $token"
-                        'Content-Type' = 'application/json'
-                    } -Body $body -ErrorAction Stop
-                    Write-Host "  ✓ Successfully added managed identity via REST API fallback" -ForegroundColor Green
-                    $success = $true
-                } catch {
-                    Write-Error "REST API fallback also failed: $_"
-                    throw
-                }
-            }
-        }
+    # Check if it's an "already exists" error (which is OK)
+    if ($errorMessage -like "*already exists*" -or $errorMessage -like "*already a member*") {
+        Write-Host "  ℹ️  Identity is already a member of root collection - continuing..." -ForegroundColor Yellow
+    } else {
+        throw
     }
 }
 
