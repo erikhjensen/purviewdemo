@@ -1,97 +1,25 @@
+# original script: https://raw.githubusercontent.com/tayganr/purviewdemo/main/scripts/script.ps1
+
 param(
-    [Parameter(Mandatory)][string]$accountName,
-    [Parameter(Mandatory)][string]$adfName,
-    [Parameter(Mandatory)][string]$adfPipelineName,
-    [Parameter(Mandatory)][string]$adfPrincipalId,
-    [Parameter(Mandatory)][string]$location,
-    [Parameter(Mandatory)][string]$objectId,
-    [Parameter(Mandatory)][string]$resourceGroupName,
-    [Parameter(Mandatory)][string]$sqlDatabaseName,
-    [Parameter(Mandatory)][string]$sqlSecretName,
-    [Parameter(Mandatory)][string]$sqlServerAdminLogin,
-    [Parameter(Mandatory)][string]$sqlServerName,
-    [Parameter(Mandatory)][string]$storageAccountName,
-    [Parameter(Mandatory)][string]$subscriptionId,
-    [Parameter(Mandatory)][string]$vaultUri
+    [string]$accountName,
+    [string]$adfName,
+    [string]$adfPipelineName,
+    [string]$adfPrincipalId,
+    [string]$location,
+    [string]$objectId,
+    [string]$resourceGroupName,
+    [string]$sqlDatabaseName,
+    [string]$sqlSecretName,
+    [string]$sqlServerAdminLogin,
+    [string]$sqlServerName,
+    [string]$storageAccountName,
+    [string]$subscriptionId,
+    [string]$vaultUri
 )
 
-
-# --------------------------------------------------------------------
-# Pragmatic Module Management for Deployment Script Environment
-# Azure Deployment Scripts (PowerShell 11.0) come with pre-loaded Az modules
-# Work with the existing environment rather than trying to replace modules
-# --------------------------------------------------------------------
-$ErrorActionPreference = 'Stop'
-
-Write-Host "=== Azure Module Check ===" -ForegroundColor Cyan
-Write-Host "Deployment Script: Azure PowerShell 11.0 environment" -ForegroundColor Yellow
-Write-Host "Working with pre-loaded Az modules..." -ForegroundColor Yellow
-
-# Show what's already loaded
-Write-Host "`nPre-loaded Az modules:" -ForegroundColor Cyan
-$loadedModules = Get-Module Az.*
-if ($loadedModules) {
-    $loadedModules | Format-Table Name, Version -AutoSize
-} else {
-    Write-Host "  (none - will load as needed)" -ForegroundColor Gray
-}
-
-# Check for Az.Purview specifically
-$purviewModule = Get-Module Az.Purview -ListAvailable | Select-Object -First 1
-
-if ($purviewModule) {
-    Write-Host "`nAz.Purview found: v$($purviewModule.Version)" -ForegroundColor Green
-    Write-Host "Attempting to import Az.Purview..." -ForegroundColor Cyan
-    
-    try {
-        Import-Module Az.Purview -Global -ErrorAction Stop
-        $loaded = Get-Module Az.Purview
-        Write-Host "  ✓ Az.Purview v$($loaded.Version) loaded successfully" -ForegroundColor Green
-        $script:UsePurviewRestApi = $false
-    } catch {
-        Write-Warning "Failed to import Az.Purview: $_"
-        Write-Host "Will use REST API fallback for Purview operations" -ForegroundColor Yellow
-        $script:UsePurviewRestApi = $true
-    }
-} else {
-    Write-Warning "Az.Purview module not available in this environment"
-    Write-Host "Will use REST API for all Purview operations" -ForegroundColor Yellow
-    $script:UsePurviewRestApi = $true
-}
-
-# Ensure core modules are available
-Write-Host "`nVerifying core Az modules..." -ForegroundColor Cyan
-
-$coreModules = @('Az.Accounts', 'Az.Storage', 'Az.DataFactory')
-foreach ($moduleName in $coreModules) {
-    $module = Get-Module $moduleName
-    if (-not $module) {
-        Write-Host "  Loading $moduleName..." -ForegroundColor Yellow
-        try {
-            Import-Module $moduleName -Global -ErrorAction Stop
-            $module = Get-Module $moduleName
-            Write-Host "  ✓ $moduleName v$($module.Version)" -ForegroundColor Green
-        } catch {
-            Write-Error "Failed to load $moduleName : $_"
-            throw
-        }
-    } else {
-        Write-Host "  ✓ $moduleName v$($module.Version) already loaded" -ForegroundColor Green
-    }
-}
-
-Write-Host "`n=== Module Check Complete ===" -ForegroundColor Green
-Write-Host "Loaded Az modules:" -ForegroundColor Cyan
-Get-Module Az.* | Format-Table Name, Version -AutoSize
-
-if ($script:UsePurviewRestApi) {
-    Write-Host "`n⚠️  NOTE: Using REST API for Purview operations" -ForegroundColor Yellow
-}
-
-# --------------------------------------------------------------------
-# End Module Management
-# --------------------------------------------------------------------
-
+# newly deployed v 0.2.2 is not supported in azpowershell 12.3
+Install-Module Az.Purview -RequiredVersion 0.2.1 -Force
+Import-Module Az.Purview
 
 # Variables
 $pv_endpoint = "https://${accountName}.purview.azure.com"
@@ -243,93 +171,8 @@ function putSource([string]$access_token, [hashtable]$payload) {
     Return $response
 }
 
-Write-Host "`n=== Starting Purview Configuration ===" -ForegroundColor Cyan
-
-# Add UAMI to Root Collection Admin using REST API
-# This is more reliable than Az.Purview cmdlets in deployment script environments
-Write-Host "Adding managed identity to Purview root collection..." -ForegroundColor Yellow
-Write-Host "Using Azure Management REST API..." -ForegroundColor Cyan
-
-# Wait for RBAC role assignments to propagate
-Write-Host "  Waiting 30 seconds for RBAC permissions to propagate..." -ForegroundColor Yellow
-Start-Sleep -Seconds 30
-
-$maxAttempts = 5
-$attemptDelay = 15
-$success = $false
-
-for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-    try {
-        Write-Host "`n  Attempt $attempt of $maxAttempts..." -ForegroundColor Cyan
-        
-        # Get Azure management API token
-        Write-Host "  Getting access token..." -ForegroundColor Gray
-        $token = (Get-AzAccessToken -ResourceUrl "https://management.azure.com/").Token
-        
-        # Build the REST API URL
-        $apiUrl = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.Purview/accounts/$accountName/addRootCollectionAdmin?api-version=2021-07-01"
-        
-        Write-Host "  Adding objectId $objectId to root collection..." -ForegroundColor Gray
-        
-        # Prepare request body
-        $body = @{
-            objectId = $objectId
-        } | ConvertTo-Json
-        
-        # Make the REST API call
-        $response = Invoke-RestMethod -Uri $apiUrl `
-            -Method Post `
-            -Headers @{
-                'Authorization' = "Bearer $token"
-                'Content-Type' = 'application/json'
-            } `
-            -Body $body `
-            -ErrorAction Stop
-        
-        Write-Host "  ✓ Successfully added managed identity to root collection" -ForegroundColor Green
-        $success = $true
-        break
-        
-    } catch {
-        $errorMessage = $_.Exception.Message
-        $statusCode = $_.Exception.Response.StatusCode.value__
-        
-        Write-Warning "  Attempt $attempt failed: $errorMessage"
-        
-        # Check if it's an "already exists" error (which is OK)
-        if ($errorMessage -like "*already exists*" -or $errorMessage -like "*already a member*") {
-            Write-Host "  ℹ️  Identity is already a member of root collection - continuing..." -ForegroundColor Yellow
-            $success = $true
-            break
-        }
-        
-        # If 401 Unauthorized, RBAC might not have propagated yet
-        if ($statusCode -eq 401) {
-            Write-Warning "  401 Unauthorized - RBAC permissions may not have propagated yet"
-            
-            if ($attempt -lt $maxAttempts) {
-                Write-Host "  Waiting $attemptDelay seconds before retry..." -ForegroundColor Yellow
-                Start-Sleep -Seconds $attemptDelay
-            }
-        } else {
-            # For other errors, fail immediately
-            Write-Error "Failed to add managed identity to root collection: $errorMessage"
-            if ($_.Exception.Response) {
-                Write-Host "  Status Code: $statusCode" -ForegroundColor Red
-            }
-            throw
-        }
-    }
-}
-
-if (-not $success) {
-    Write-Error "Failed to add managed identity to root collection after $maxAttempts attempts"
-    Write-Host "`nTroubleshooting tips:" -ForegroundColor Yellow
-    Write-Host "1. Verify the managed identity has Owner permissions on the resource group" -ForegroundColor Gray
-    Write-Host "2. RBAC permissions can take up to 5 minutes to propagate" -ForegroundColor Gray
-    Write-Host "3. Check Azure Portal > Resource Group > Access Control (IAM)" -ForegroundColor Gray
-    throw "RBAC permissions did not propagate in time"
-}
+# Add UAMI to Root Collection Admin
+Add-AzPurviewAccountRootCollectionAdmin -AccountName $accountName -ResourceGroupName $resourceGroupName -ObjectId $objectId
 
 # Get Access Token
 $response = Invoke-WebRequest -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fpurview.azure.net%2F' -Headers @{Metadata="true"}
@@ -437,7 +280,6 @@ $containerName = "bing"
 $storageAccount = Get-AzStorageAccount -ResourceGroupName $resourceGroupName -Name $storageAccountName
 $RepoUrl = 'https://api.github.com/repos/microsoft/BingCoronavirusQuerySet/zipball/master'
 Invoke-RestMethod -Uri $RepoUrl -OutFile "${containerName}.zip"
-if (Test-Path "${containerName}") { Remove-Item "${containerName}" -Recurse -Force }
 Expand-Archive -Path "${containerName}.zip"
 Set-Location -Path "${containerName}"
 Get-ChildItem -File -Recurse | Set-AzStorageBlobContent -Container ${containerName} -Context $storageAccount.Context
@@ -476,7 +318,7 @@ $scanAdlsPayload = @{
         }
     }
 }
-$scan2 = putScan $access_token $sourceAdlsPayload.name $scanAdlsPayload
+$scacn2 = putScan $access_token $sourceAdlsPayload.name $scanAdlsPayload
 
 # 12. Trigger Scan
 $run2 = runScan $access_token $sourceAdlsPayload.name $scanAdlsPayload.name
