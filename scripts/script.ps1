@@ -17,47 +17,95 @@ param(
 
 
 # --------------------------------------------------------------------
-# Guard against Az module version collisions in ARM/Bicep DeploymentScript
+# Module Management for Deployment Script Environment
 # --------------------------------------------------------------------
 $ErrorActionPreference = 'Stop'
-$global:PSModuleAutoloadingPreference = 'None'
 
-# Remove any Az modules already loaded into the session
-Get-Module Az* -All |
-  Sort-Object Name, Version -Descending |
-  ForEach-Object {
-    try { Remove-Module $_.Name -Force -ErrorAction SilentlyContinue } catch {}
-  }
+Write-Host "=== Azure Module Management ===" -ForegroundColor Cyan
+Write-Host "Preparing PowerShell environment for Purview operations..." -ForegroundColor Yellow
 
-# Trust PSGallery (Deployment Script runs non-interactive)
-try { Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted } catch {}
-
-function Ensure-ModuleVersion {
-  param(
-    [Parameter(Mandatory)][string]$Name,
-    [Parameter(Mandatory)][string]$Version
-  )
-  $available = Get-Module $Name -ListAvailable | Where-Object { $_.Version -eq [version]$Version }
-  if (-not $available) {
-    Install-Module -Name $Name -RequiredVersion $Version -Scope CurrentUser -Force -ErrorAction Stop
-  }
-  Import-Module -Name $Name -RequiredVersion $Version -Force -ErrorAction Stop
+# Trust PSGallery for non-interactive installation
+try {
+    $repo = Get-PSRepository -Name 'PSGallery' -ErrorAction SilentlyContinue
+    if (-not $repo -or $repo.InstallationPolicy -ne 'Trusted') {
+        Write-Host "Setting PSGallery as trusted..." -ForegroundColor Cyan
+        Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction Stop
+    }
+} catch {
+    Write-Warning "Could not configure PSGallery: $_"
 }
 
-# Pin exact versions: Az.Purview 0.3.0 requires Az.Accounts 5.1.1
-Ensure-ModuleVersion -Name 'Az.Accounts'  -Version '5.1.1'
-Ensure-ModuleVersion -Name 'Az.Purview'   -Version '0.3.0'
+# Show pre-existing modules
+Write-Host "`nPre-loaded Az modules:" -ForegroundColor Cyan
+Get-Module Az.* | Format-Table Name, Version -AutoSize
 
-# Pin other Az modules used in this script to avoid pulling an incompatible bundle
-# (Adjust versions if your org standard differs; these are commonly compatible with Az.Accounts 5.1.1.)
-Ensure-ModuleVersion -Name 'Az.Storage'     -Version '5.4.0'
-Ensure-ModuleVersion -Name 'Az.DataFactory' -Version '1.18.3'
+# Function to safely load a module
+function Import-AzModuleSafely {
+    param(
+        [Parameter(Mandatory)][string]$ModuleName,
+        [string]$MinimumVersion,
+        [switch]$Force
+    )
+    
+    Write-Host "`nProcessing: $ModuleName" -ForegroundColor Yellow
+    
+    try {
+        # Check if module is already loaded
+        $loadedModule = Get-Module -Name $ModuleName -ErrorAction SilentlyContinue
+        
+        if ($loadedModule) {
+            Write-Host "  ✓ Already loaded: $ModuleName v$($loadedModule.Version)" -ForegroundColor Green
+            return $true
+        }
+        
+        # Check if module is available
+        $availableModules = Get-Module -Name $ModuleName -ListAvailable | Sort-Object Version -Descending
+        
+        if (-not $availableModules) {
+            Write-Host "  Installing $ModuleName..." -ForegroundColor Cyan
+            if ($MinimumVersion) {
+                Install-Module -Name $ModuleName -MinimumVersion $MinimumVersion -Scope CurrentUser -AllowClobber -Force -SkipPublisherCheck -ErrorAction Stop
+            } else {
+                Install-Module -Name $ModuleName -Scope CurrentUser -AllowClobber -Force -SkipPublisherCheck -ErrorAction Stop
+            }
+            $availableModules = Get-Module -Name $ModuleName -ListAvailable | Sort-Object Version -Descending
+        }
+        
+        # Import the module
+        $moduleToLoad = $availableModules | Select-Object -First 1
+        Write-Host "  Importing $ModuleName v$($moduleToLoad.Version)..." -ForegroundColor Cyan
+        Import-Module -Name $ModuleName -RequiredVersion $moduleToLoad.Version -Global -Force -ErrorAction Stop
+        
+        $imported = Get-Module -Name $ModuleName
+        Write-Host "  ✓ Successfully loaded: $ModuleName v$($imported.Version)" -ForegroundColor Green
+        return $true
+        
+    } catch {
+        Write-Error "  ✗ Failed to load $ModuleName: $_"
+        return $false
+    }
+}
 
-Write-Host 'Resolved Az modules:'
-Get-Module Az.Accounts, Az.Purview, Az.Storage, Az.DataFactory |
-  Format-Table Name, Version, ModuleBase
+# Load modules in dependency order
+Write-Host "`nLoading required Azure modules..." -ForegroundColor Cyan
+
+$success = $true
+$success = $success -and (Import-AzModuleSafely -ModuleName 'Az.Accounts')
+$success = $success -and (Import-AzModuleSafely -ModuleName 'Az.Storage')
+$success = $success -and (Import-AzModuleSafely -ModuleName 'Az.DataFactory')
+$success = $success -and (Import-AzModuleSafely -ModuleName 'Az.Purview')
+
+if (-not $success) {
+    throw "Failed to load one or more required modules"
+}
+
+Write-Host "`n=== Module Loading Complete ===" -ForegroundColor Green
+Write-Host "Loaded modules:" -ForegroundColor Cyan
+Get-Module Az.Accounts, Az.Purview, Az.Storage, Az.DataFactory | 
+    Format-Table Name, Version, @{Label="Path";Expression={Split-Path $_.Path -Parent}} -AutoSize
+
 # --------------------------------------------------------------------
-# End guard
+# End Module Management
 # --------------------------------------------------------------------
 
 
@@ -211,8 +259,45 @@ function putSource([string]$access_token, [hashtable]$payload) {
     Return $response
 }
 
-# Add UAMI to Root Collection Admin
-Add-AzPurviewAccountRootCollectionAdmin -AccountName $accountName -ResourceGroupName $resourceGroupName -ObjectId $objectId
+Write-Host "`n=== Starting Purview Configuration ===" -ForegroundColor Cyan
+
+# Add UAMI to Root Collection Admin with retry logic
+Write-Host "Adding managed identity to Purview root collection..." -ForegroundColor Yellow
+$maxRetries = 3
+$retryCount = 0
+$success = $false
+
+while (-not $success -and $retryCount -lt $maxRetries) {
+    try {
+        $retryCount++
+        Write-Host "Attempt $retryCount of $maxRetries..." -ForegroundColor Cyan
+        
+        # Verify the cmdlet is available
+        $cmdlet = Get-Command Add-AzPurviewAccountRootCollectionAdmin -ErrorAction Stop
+        Write-Host "  ✓ Cmdlet found: $($cmdlet.Source) v$($cmdlet.Version)" -ForegroundColor Green
+        
+        # Execute the command
+        Add-AzPurviewAccountRootCollectionAdmin -AccountName $accountName -ResourceGroupName $resourceGroupName -ObjectId $objectId -ErrorAction Stop
+        
+        Write-Host "  ✓ Successfully added managed identity to root collection" -ForegroundColor Green
+        $success = $true
+        
+    } catch {
+        Write-Warning "  Attempt $retryCount failed: $_"
+        
+        if ($retryCount -lt $maxRetries) {
+            Write-Host "  Waiting 10 seconds before retry..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 10
+            
+            # Try reimporting the module
+            Write-Host "  Reimporting Az.Purview module..." -ForegroundColor Cyan
+            Import-Module Az.Purview -Force -Global -ErrorAction SilentlyContinue
+        } else {
+            Write-Error "Failed to add managed identity to root collection after $maxRetries attempts: $_"
+            throw
+        }
+    }
+}
 
 # Get Access Token
 $response = Invoke-WebRequest -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fpurview.azure.net%2F' -Headers @{Metadata="true"}
